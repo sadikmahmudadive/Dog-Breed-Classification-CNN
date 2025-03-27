@@ -20,7 +20,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Load TFLite model and allocate tensors
-interpreter = tf.lite.Interpreter(model_path='dog_breed_predictor.tflite')
+interpreter = tf.lite.Interpreter(model_path='dog_breed_classifier.tflite')
 interpreter.allocate_tensors()
 
 # Get input and output details
@@ -46,13 +46,19 @@ def preprocess_image(image):
     image_array = np.array(image, dtype=np.float32) / 255.0  # Normalize to [0,1]
     return np.expand_dims(image_array, axis=0)  # Add batch dimension
 
+def predict_single_image(image_array):
+    """Predict breed probabilities for a single image"""
+    interpreter.set_tensor(input_details[0]['index'], image_array)
+    interpreter.invoke()
+    return interpreter.get_tensor(output_details[0]['index'])[0]
+
 @app.route('/')
 def home():
-    return 'Dog Breed Prediction API - Send POST request with two dog images to /predict'
+    return 'Dog Breed Offspring Prediction API - Send POST request with two dog images to /predict-offspring'
 
-@app.route('/predict', methods=['POST'])
-def predict():
-    """Handle prediction requests"""
+@app.route('/predict-offspring', methods=['POST'])
+def predict_offspring():
+    """Handle offspring prediction from two parent images"""
     try:
         # Check if both images are present
         if 'image1' not in request.files or 'image2' not in request.files:
@@ -82,29 +88,43 @@ def predict():
                 'error': f'Input shape mismatch. Expected {expected_shape}, got {img1_processed.shape}'
             }), 400
         
-        # Run inference
+        # Run inference for both images
         try:
-            interpreter.set_tensor(input_details[0]['index'], img1_processed)
-            interpreter.set_tensor(input_details[1]['index'], img2_processed)
-            interpreter.invoke()
-            prediction = interpreter.get_tensor(output_details[0]['index'])
+            # Get predictions for both parents
+            pred1 = predict_single_image(img1_processed)
+            pred2 = predict_single_image(img2_processed)
+            
+            # Combine probabilities (average)
+            combined_probs = (pred1 + pred2) / 2
         except Exception as e:
             return jsonify({'error': f'Model inference failed: {str(e)}'}), 500
         
-        # Process predictions
+        # Process combined predictions
         top_k = 3
-        top_indices = np.argsort(prediction[0])[-top_k:][::-1]
+        top_indices = np.argsort(combined_probs)[-top_k:][::-1]
+        
+        # Get parent predictions
+        parent1_top_idx = np.argmax(pred1)
+        parent2_top_idx = np.argmax(pred2)
         
         results = {
-            'predictions': [
+            'parent1': {
+                'breed': class_names[parent1_top_idx],
+                'confidence': float(pred1[parent1_top_idx])
+            },
+            'parent2': {
+                'breed': class_names[parent2_top_idx],
+                'confidence': float(pred2[parent2_top_idx])
+            },
+            'offspring_predictions': [
                 {
                     'breed': class_names[i],
-                    'confidence': float(prediction[0][i])
+                    'confidence': float(combined_probs[i])
                 } for i in top_indices
             ],
-            'top_prediction': {
+            'top_offspring_prediction': {
                 'breed': class_names[top_indices[0]],
-                'confidence': float(prediction[0][top_indices[0]])
+                'confidence': float(combined_probs[top_indices[0]])
             }
         }
         
